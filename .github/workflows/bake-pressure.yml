@@ -1,0 +1,46 @@
+# Windrose pressure baker — publishes a global GFS MSL-pressure grid to GitHub Pages every 6h.
+# Deploy: copy this file to `.github/workflows/bake-pressure.yml` in the mwsupplylimited.github.io
+# (or windrose Pages) repo, and `bake.py` to the repo root. Ensure Pages serves the repo (or /docs).
+name: bake-pressure
+
+on:
+  schedule:
+    # 4x/day, deliberately OFF the :00 contention spike and ~4.5h after each GFS cycle
+    # (00/06/12/18Z) so a complete f000–f072 set is always posted. Cron is best-effort (no SLA);
+    # the app keys freshness off modelRunUnix in the file, never off "the Action should have run".
+    - cron: "17 4,10,16,22 * * *"
+  workflow_dispatch: {}          # manual trigger for the first run / testing
+
+concurrency:
+  group: bake-pressure           # never overlap two bakes
+  cancel-in-progress: false
+
+permissions:
+  contents: write                # commit the baked file back to the repo
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install eccodes
+        run: pip install --quiet eccodes
+      - name: Bake pressure grid
+        env:
+          OUT_DIR: data          # -> served at https://<pages-host>/data/pressure_gfs.bin.gz
+        run: python bake.py
+      - name: Commit if changed
+        run: |
+          git config user.name  "windrose-baker"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/pressure_gfs.bin.gz data/pressure_manifest.json
+          if git diff --cached --quiet; then
+            echo "no change (same run) — nothing to commit"
+          else
+            git commit -m "chore: refresh GFS pressure grid [skip ci]"
+            git push
+          fi
